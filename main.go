@@ -9,9 +9,20 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"jagocoffee/profiler-service/storage"
 )
 
 func main() {
+	// Init storage
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "profiler.db"
+	}
+	if err := storage.Init(dbPath); err != nil {
+		log.Fatalf("Storage init failed: %v", err)
+	}
+	defer storage.Close()
+
 	loc, err := time.LoadLocation("Asia/Jakarta")
 	if err != nil {
 		log.Fatalf("Failed to load timezone: %v", err)
