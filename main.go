@@ -1,15 +1,23 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/robfig/cron/v3"
 	"jagocoffee/profiler-service/storage"
+)
+
+// Track profiles per window
+var (
+	profilesMu sync.Mutex
+	profiles   = make(map[string][]*Profile) // window -> []*Profile
 )
 
 func main() {
@@ -78,13 +86,82 @@ func runProfiler(window string, sampleNum int) {
 
 	prof, err := fetchProfile(window, sampleNum)
 	if err != nil {
-		log.Printf("Error fetching profile: %v", err)
+		errMsg := fmt.Sprintf("Failed to fetch profile (sample %d): %v", sampleNum, err)
+		log.Printf("Error: %s", errMsg)
+		sendSlackError(window, errMsg)
 		return
 	}
 
 	log.Printf("Profile fetched: %s (sample %d/3)", window, sampleNum)
-	log.Printf("CPU size: %d bytes, Heap size: %d bytes", len(prof.CPUProf), len(prof.HeapProf))
 
-	// TODO: Aggregate when sampleNum == 3
-	// TODO: Send to analyzer
+	// Collect profile
+	profilesMu.Lock()
+	profiles[window] = append(profiles[window], prof)
+	profilesMu.Unlock()
+
+	// Only analyze on end sample (sample 3)
+	if sampleNum == 3 {
+		log.Printf("End sample collected for %s. Analyzing...", window)
+		go analyzeAndReport(window)
+	}
+}
+
+func analyzeAndReport(window string) {
+	profilesMu.Lock()
+	profs := profiles[window]
+	profilesMu.Unlock()
+
+	if len(profs) != 3 {
+		errMsg := fmt.Sprintf("Expected 3 profiles, got %d", len(profs))
+		log.Printf("Error: %s", errMsg)
+		sendSlackError(window, errMsg)
+		return
+	}
+
+	// Analyze
+	result, err := analyzeProfiles(window, profs)
+	if err != nil {
+		errMsg := fmt.Sprintf("Analysis failed: %v", err)
+		log.Printf("Error: %s", errMsg)
+		sendSlackError(window, errMsg)
+		return
+	}
+
+	// Save to DB
+	anomaliesJSON, _ := json.Marshal(result.Anomalies)
+	metricsJSON, _ := json.Marshal(result.Metrics)
+	ydayJSON, _ := json.Marshal(result.YdayComparison)
+
+	rec := &storage.ProfileRecord{
+		RunTimestamp:   profs[0].Timestamp,
+		Window:         window,
+		SampleNum:      3,
+		CPUProfileURL:  profs[0].CPUPath,
+		HeapProfileURL: profs[0].HeapPath,
+		CPUTextURL:     profs[0].CPUTextPath,
+		HeapTextURL:    profs[0].HeapTextPath,
+		Summary:        result.Summary,
+		Anomalies:      string(anomaliesJSON),
+		Metrics:        string(metricsJSON),
+		YdayComparison: string(ydayJSON),
+	}
+
+	if err := storage.SaveProfile(rec); err != nil {
+		errMsg := fmt.Sprintf("DB save failed: %v", err)
+		log.Printf("Error: %s", errMsg)
+		sendSlackError(window, errMsg)
+		return
+	}
+
+	log.Printf("Analysis complete for %s. Saved to DB.", window)
+
+	// Clear from map
+	profilesMu.Lock()
+	delete(profiles, window)
+	profilesMu.Unlock()
+
+	// Send report to Slack
+	sendSlackReport(result, window)
+
+	// TODO: Prompt GitHub issues
 }
