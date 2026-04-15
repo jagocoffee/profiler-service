@@ -155,6 +155,14 @@ func analyzeAndReport(window string) {
 
 	log.Printf("Analysis complete for %s. Saved to DB.", window)
 
+	// Upload to GitHub
+	urls, err := uploadProfilesToGitHub(profs, window)
+	if err != nil {
+		log.Printf("GitHub upload error: %v", err)
+	} else if len(urls) > 0 {
+		log.Printf("Uploaded %d profiles to GitHub", len(urls))
+	}
+
 	// Clear from map
 	profilesMu.Lock()
 	delete(profiles, window)
@@ -162,6 +170,4 @@ func analyzeAndReport(window string) {
 
 	// Send report to Slack
 	sendSlackReport(result, window)
-
-	// TODO: Prompt GitHub issues
 }
