@@ -64,6 +64,16 @@ func runProfiler(window string, sampleNum int) {
 	now := time.Now()
 	fmt.Printf("[%s] Profiler triggered - %s peak, sample %d/3\n",
 		now.Format("2006-01-02 15:04:05"), window, sampleNum)
-	// TODO: Implement actual profiling logic
+
+	prof, err := fetchProfile(window, sampleNum)
+	if err != nil {
+		log.Printf("Error fetching profile: %v", err)
+		return
+	}
+
+	log.Printf("Profile fetched: %s (sample %d/3)", window, sampleNum)
+	log.Printf("CPU size: %d bytes, Heap size: %d bytes", len(prof.CPUProf), len(prof.HeapProf))
+
 	// TODO: Aggregate when sampleNum == 3
+	// TODO: Send to analyzer
 }
